@@ -12,7 +12,6 @@ import { Endpoint, PeerPool, WebsocketNetworkServer } from './esWebSocketNetwork
 const buf = fs.readFileSync('./config.json');
 const config = JSON.parse(buf.toString());
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const app = websockify(new Koa());
 //const router = new Router();
 const wsRouter = new Router();
 
@@ -36,6 +35,20 @@ if (env_port) {
     }
 }
 
+let app = null;
+if (config.httpConfig) {
+    app = websockify(new Koa(), {
+        maxPayload: config.maxPayload
+    });
+}
+if (config.httpsConfig) {
+    app = websockify(new Koa(), {
+        maxPayload: config.maxPayload
+    }, {
+        key: fs.readFileSync(config.httpsConfig.ssl_key_file),
+        cert: fs.readFileSync(config.httpsConfig.ssl_cert_file)
+    });
+}
 
 const pool = {};
 config.apps.forEach(app => {
@@ -51,9 +64,9 @@ config.apps.forEach(app => {
         ep.localAddress = ctx.request.socket.localAddress;
         ep.localPort = ctx.request.socket.localPort;
         let p = null;
-        try{
+        try {
             p = url.parse(ctx.request.url);
-        } catch(ex) {
+        } catch (ex) {
             console.error(ex);
         }
         ep.appPath = url.parse(ctx.request.url).path;
@@ -74,90 +87,12 @@ config.apps.forEach(app => {
 app.use(serve(__dirname + '/public'));
 app.ws.use(wsRouter.routes()).use(wsRouter.allowedMethods());
 
-app.listen(80);
-// if (config.httpConfig) {
-//     http.createServer(app.callback()).listen(config.httpConfig.port, _ => {
-//         console.log(`listen: ${config.httpConfig.port}`);
-//     });
-// }
-// if (config.httpsConfig) {
-//     https.createServer(app.callback()).listen(config.httpsConfig.port, _ => {
-//         console.log(`listen: ${config.httpsConfig.port}`);
-//     });
-// }
+if (config.httpConfig)
+    app.listen(config.httpConfig.port, _ => {
+        console.log(`listen ${config.httpConfig.port}`);
+    });
+else if (config.httpsConfig)
+    app.listen(config.httpsConfig.port, _ => {
+        console.log(`listen ${config.httpsConfig.port}`);
+    });
 
-
-class StreamingWebServer {
-    constructor() {
-        this.pool = {};
-        this.rooms = {};
-    }
-
-    addClient(ws) {
-        ws.id = uuid.v4();
-        this.pool[ws.id] = ws;
-        ws.on('message', data => {
-            const msg = JSON.stringify(data);
-            switch (msg.type) {
-                case 'room': {
-                    ws.roomId = msg.rooomId;
-                    this.rooms[msg.roomId] = {
-                        name: msg.roomName,
-                        ownerId: ws.id,
-                        clients: {}
-                    };
-                    break;
-                }
-                case 'join': {
-                    const room = this.rooms[msg.roomId];
-                    const clients = room.clients;
-                    Object.keys(clients).forEach(id => {
-                        clients[id].send(JSON.stringify({ type: 'join', id: msg.id, name: msg.name }));
-                    });
-                    ws.roomId = msg.roomId;
-                    if (room.owner) {
-                        room.clients[ws.id] = { ws, name: msg.name };
-                    } else {
-                        ws.send(JSON.stringify({ type: 'roomclosed' }));
-                    }
-                    break;
-                }
-                case 'chat': {
-                    if (!msg.src && !this.pool[msg.src])
-                        return;
-                    const room = this.rooms[msg.roomId];
-                    const ownerId = room.ownerId;
-                    const clients = room.clients;
-                    if (this.pool[ownerId])
-                        this.pool[ownerId].send(msg);
-                    Object.keys(clients).forEach(id => {
-                        clients[id].ws.send(msg);
-                    });
-                }
-            }
-        });
-        ws.on('close', w => {
-            delete this.pool[w.id];
-            const roomId = w.roomId;
-            const room = this.rooms[roomId];
-            if (!room)
-                return;
-            if (room.ownerId === w.id) {
-                room.ownerId = null;
-                const clients = room.clients;
-                Object.keys(clients).forEach(id => {
-                    clients[id].ws.send(JSON.stringify({ type: 'roomend' }));
-                });
-            } else {
-                if (room.clients[ws.id]) {
-                    delete room.clients[ws.id];
-                    if (!Object.keys(room.clients).length) {
-                        delete this.rooms[roomId];
-                    }
-                }
-            }
-        });
-        this.pool[ws.id] = ws;
-    }
-}
-const swServer = new StreamingWebServer();
