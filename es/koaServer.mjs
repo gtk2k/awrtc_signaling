@@ -2,8 +2,6 @@ import Koa from 'koa';
 import Router from 'koa-router';
 import websockify from 'koa-websocket';
 import serve from 'koa-static';
-import http from 'http';
-import https from 'https';
 import fs from 'fs';
 import { dirname } from 'path';
 import url, { fileURLToPath } from 'url';
